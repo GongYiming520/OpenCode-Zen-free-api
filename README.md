@@ -141,7 +141,7 @@ D:\OpenCode-Zen-free-api
 也可以用 Git：
 
 ```bat
-git clone https://github.com/Fly143/OpenCode-Zen-free-api.git
+git clone https://github.com/GongYiming520/OpenCode-Zen-free-api.git
 cd OpenCode-Zen-free-api
 ```
 
@@ -189,7 +189,7 @@ cd OpenCode-Zen-free-api
 ## macOS / Linux / Termux
 
 ```bash
-git clone https://github.com/Fly143/OpenCode-Zen-free-api.git
+git clone https://github.com/GongYiming520/OpenCode-Zen-free-api.git
 cd OpenCode-Zen-free-api
 chmod +x start.sh stop.sh
 ./start.sh
@@ -661,7 +661,9 @@ Windows 也可以双击 `test_api.bat`、`test_free_models.bat`。
 
 ## 相关
 
-- 仓库：<https://github.com/Fly143/OpenCode-Zen-free-api>
+- 本仓库：<https://github.com/GongYiming520/OpenCode-Zen-free-api>
+- 上游原仓库（fork 来源）：<https://github.com/Fly143/OpenCode-Zen-free-api>
+- 本仓库在上游基础上增加了开箱即用的启动/停止脚本、跨平台自测和更完整的说明文档。
 - 早期“伪造请求头”方案（已失效）保留在分支 `legacy-header-spoof`：
 
 ```bash

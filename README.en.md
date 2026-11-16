@@ -144,7 +144,7 @@ Later starts are much faster.
 ## macOS / Linux / Termux
 
 ```bash
-git clone https://github.com/Fly143/OpenCode-Zen-free-api.git
+git clone https://github.com/GongYiming520/OpenCode-Zen-free-api.git
 cd OpenCode-Zen-free-api
 chmod +x start.sh stop.sh
 ./start.sh
@@ -468,4 +468,8 @@ python test_api.py
 python test_free_models.py --quick
 ```
 
-Repository: <https://github.com/Fly143/OpenCode-Zen-free-api>
+This fork: <https://github.com/GongYiming520/OpenCode-Zen-free-api>
+
+Upstream (fork source): <https://github.com/Fly143/OpenCode-Zen-free-api>
+
+This fork adds one-click launchers, cross-platform self-tests, and clearer docs.
