@@ -5,6 +5,9 @@
 > 把 **OpenCode Zen 的免费模型**变成标准的 **OpenAI 兼容接口**：
 > 客户端填 `http://127.0.0.1:8790/v1`，就能像用 OpenAI 一样使用 Zen 的免费模型。
 
+> 本仓库是 [Fly143/OpenCode-Zen-free-api](https://github.com/Fly143/OpenCode-Zen-free-api)
+> 的 fork，在原项目基础上补齐了开箱即用的启动脚本、隔离数据目录、跨平台自测和完整文档。
+
 **三步开始：** 下载项目 → 双击 `start.bat` → 在任意 OpenAI 客户端里填 Base URL。
 
 ---

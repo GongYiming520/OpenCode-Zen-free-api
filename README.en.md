@@ -6,6 +6,11 @@
 > endpoint**. Point any OpenAI client at `http://127.0.0.1:8790/v1` and use a
 > free model.
 
+> This is a fork of
+> [Fly143/OpenCode-Zen-free-api](https://github.com/Fly143/OpenCode-Zen-free-api).
+> It adds one-click launchers, an isolated data directory, cross-platform
+> self-tests, and clearer documentation.
+
 **Three steps:** download the project → double-click `start.bat` → fill in the
 Base URL in your client.
 
