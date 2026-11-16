@@ -32,6 +32,8 @@ import argparse, json, os, shutil, signal, subprocess, sys, threading, time
 import urllib.request, urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+VERSION = "1.1.0"
+
 # 默认不做模型过滤：/v1/models 直接把 Zen 上游的全量清单原样返回，
 # chat 请求里的 model 也原样透传给上游（可用与否由上游裁决）。
 # 只有显式传 --free-models a,b,c 时才启用白名单（旧行为）。
@@ -119,19 +121,37 @@ def find_opencode():
 def start_server():
     global _proc, OC_BASE
     OC_BASE = f"http://127.0.0.1:{ARGS.oc_port}"
-    # 已有服务器就直接用
+    # 已有服务器就直接用。注意：复用的实例可能不是本桥拉起的，
+    # 因此拿不到注入的 bridge agent，需要退回到 opencode 自带的 build。
     try:
         oc("GET", "/global/health", timeout=3)
-        print(f"[bridge] 复用已运行的 opencode serve @ {OC_BASE}")
+        print(f"[bridge] Reusing the running opencode serve @ {OC_BASE}")
+        if ARGS.home:
+            print("[bridge] Warning: --home only applies when this bridge starts opencode itself.")
+        if ARGS.agent and ARGS.agent != "build":
+            try:
+                cfg = oc("GET", "/config", timeout=5)
+                agents = cfg.get("agent") if isinstance(cfg, dict) else {}
+                if not isinstance(agents, dict) or ARGS.agent not in agents:
+                    print(f"[bridge] Warning: agent {ARGS.agent!r} is not available on the reused "
+                          f"instance; falling back to 'build' (larger system prompt).")
+                    ARGS.agent = "build"
+            except Exception:
+                pass
         return
     except Exception:
         pass
     binary = find_opencode()
     if not binary:
-        sys.exit("[bridge] 找不到 opencode 二进制，请 --opencode-bin 指定，或 npm i -g opencode-ai")
+        sys.exit("[bridge] ERROR: opencode binary not found. Install it with "
+                 "`npm i -g opencode-ai`, or pass --opencode-bin PATH.")
     env = dict(os.environ)
     if ARGS.home:
         env["HOME"] = ARGS.home
+        if os.name == "nt":
+            # Windows 版 opencode（Bun）读 USERPROFILE 而不是 HOME，
+            # 不同步它会导致 --home 指向的干净目录不生效。
+            env["USERPROFILE"] = ARGS.home
     # 用环境变量注入一个精简 agent（与用户已有 opencode.json 合并，不改其文件）：
     # agent.<名>.prompt 为「非空」时会「替换」opencode 默认注入的 ~9.5KB 系统提示。
     if ARGS.agent and ARGS.agent != "build":
@@ -150,19 +170,26 @@ def start_server():
     for _ in range(60):
         try:
             oc("GET", "/global/health", timeout=3)
-            print(f"[bridge] opencode serve 已就绪 ({binary})")
+            print(f"[bridge] opencode serve is ready ({binary})")
             return
         except Exception:
             time.sleep(0.5)
-    sys.exit("[bridge] opencode serve 启动失败")
+    sys.exit("[bridge] ERROR: opencode serve failed to start. "
+             "Check that the opencode binary works: opencode --version")
 
 
 def flush_children(*_):
     if _proc:
         try:
-            _proc.send_signal(signal.SIGTERM)
-            time.sleep(0.5)
-            _proc.kill()
+            if os.name == "nt":
+                # Popen 的直接子进程可能是 cmd.exe（opencode.CMD），
+                # 只杀父进程会留下 node/opencode 孤儿进程。
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(_proc.pid)],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+            else:
+                _proc.send_signal(signal.SIGTERM)
+                time.sleep(0.5)
+                _proc.kill()
         except Exception:
             pass
     sys.exit(0)
@@ -190,7 +217,7 @@ def split_messages(messages):
     for m in messages or []:
         text = _text_of(m.get("content"))
         role = m.get("role")
-        if role == "system":
+        if role in ("system", "developer"):
             if text:
                 systems.append(text)
         elif role == "user":
@@ -222,11 +249,24 @@ def ask(model, prompt, key, system=None):
 
 
 # ---------- HTTP 端点 ----------
+class BridgeHTTPServer(ThreadingHTTPServer):
+    # Windows 的 SO_REUSEADDR 允许两个进程绑定同一端口（会静默抢请求），
+    # 必须关掉；Unix 上保留它是为了正常重启时能复用 TIME_WAIT 端口。
+    allow_reuse_address = os.name != "nt"
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def log_message(self, *a):
         pass
+
+    def handle_one_request(self):
+        # 客户端提前断开（健康检查、取消请求、关闭窗口）不应该打印整段 traceback。
+        try:
+            super().handle_one_request()
+        except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+            self.close_connection = True
 
     def _json(self, code, obj):
         b = json.dumps(obj, ensure_ascii=False).encode()
@@ -246,7 +286,24 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        if self.path.rstrip("/").endswith("/models"):
+        path = self.path.split("?", 1)[0].rstrip("/")
+        if path in ("", "/"):
+            self._json(200, {
+                "name": "OpenCode Zen Bridge",
+                "version": VERSION,
+                "ok": True,
+                "endpoints": {
+                    "models": "/v1/models",
+                    "chat": "/v1/chat/completions",
+                    "health": "/health",
+                },
+                "usage": {
+                    "base_url": f"http://127.0.0.1:{ARGS.port}/v1",
+                    "api_key": "any non-empty string",
+                    "example_model": "deepseek-v4.1-flash-free",
+                },
+            })
+        elif path.endswith("/models"):
             if ARGS.free_models:            # 显式传了 --free-models 才过滤
                 now = int(time.time())
                 data = [{"id": m, "object": "model", "created": now, "owned_by": "opencode"}
@@ -254,6 +311,15 @@ class Handler(BaseHTTPRequestHandler):
             else:                           # 默认：上游给什么就返回什么
                 data = upstream_models()
             self._json(200, {"object": "list", "data": data})
+        elif "/models/" in path:
+            model_id = path.rsplit("/models/", 1)[-1]
+            for m in (upstream_models() if not ARGS.free_models else []):
+                if m.get("id") == model_id:
+                    return self._json(200, m)
+            if model_id in (ARGS.free_models or []):
+                return self._json(200, {"id": model_id, "object": "model",
+                                        "created": int(time.time()), "owned_by": "opencode"})
+            self._json(404, {"error": {"message": f"model {model_id!r} not found"}})
         elif "health" in self.path:
             self._json(200, {"ok": True})
         else:
@@ -291,18 +357,22 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Connection", "keep-alive")
+            self.send_header("Connection", "close")
             self.end_headers()
             def chunk(delta, finish=None):
                 d = {"id": cid, "object": "chat.completion.chunk", "created": int(time.time()),
                      "model": model, "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
                 self.wfile.write(f"data: {json.dumps(d, ensure_ascii=False)}\n\n".encode())
-            chunk({"role": "assistant", "content": ""})
-            for i in range(0, len(text), 24):
-                chunk({"content": text[i:i+24]}); self.wfile.flush()
-            chunk({}, "stop")
-            self.wfile.write(b"data: [DONE]\n\n")
-            self.wfile.flush()
+            try:
+                chunk({"role": "assistant", "content": ""})
+                for i in range(0, len(text), 24):
+                    chunk({"content": text[i:i+24]}); self.wfile.flush()
+                chunk({}, "stop")
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+            except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+                pass
+            self.close_connection = True
         else:
             self._json(200, {"id": cid, "object": "chat.completion", "created": int(time.time()),
                              "model": model,
@@ -314,6 +384,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     global ARGS
     ap = argparse.ArgumentParser()
+    ap.add_argument("--version", action="version", version=f"oc_bridge {VERSION}")
     ap.add_argument("--port", type=int, default=8790)
     ap.add_argument("--oc-port", type=int, default=4097)
     ap.add_argument("--opencode-bin", default=None)
@@ -335,13 +406,26 @@ def main():
         ARGS.agent = "build"
     signal.signal(signal.SIGTERM, flush_children)
     signal.signal(signal.SIGINT, flush_children)
+    # 先绑定 HTTP 端口，避免端口被占用时已经拉起 opencode serve 留下孤儿进程。
+    try:
+        httpd = BridgeHTTPServer(("127.0.0.1", ARGS.port), Handler)
+    except OSError as e:
+        sys.exit(f"[bridge] ERROR: cannot listen on 127.0.0.1:{ARGS.port} ({e}). "
+                 f"The port is probably already in use; pass --port 8791 or stop the other process.")
     start_server()
     if ARGS.free_models:
         desc = f"白名单 {len(ARGS.free_models)} 个: {', '.join(ARGS.free_models[:4])}..."
     else:
         desc = f"不过滤（上游全量 {len(upstream_models())} 个模型）"
-    print(f"[bridge] OpenAI 兼容端点: http://127.0.0.1:{ARGS.port}/v1  ({desc})  mode={ARGS.mode}")
-    ThreadingHTTPServer(("127.0.0.1", ARGS.port), Handler).serve_forever()
+    print(f"[bridge] OpenAI-compatible endpoint: http://127.0.0.1:{ARGS.port}/v1  ({desc})  mode={ARGS.mode}")
+    print("=" * 64)
+    print("  Base URL : http://127.0.0.1:%d/v1" % ARGS.port)
+    print("  API Key  : any non-empty string (not checked)")
+    print("  Model    : deepseek-v4.1-flash-free")
+    print("  Health   : http://127.0.0.1:%d/health" % ARGS.port)
+    print("  Stop     : Ctrl+C")
+    print("=" * 64)
+    httpd.serve_forever()
 
 
 if __name__ == "__main__":

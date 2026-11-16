@@ -1,52 +1,56 @@
 #!/usr/bin/env sh
-# start.sh — oc_bridge 一键启动（Linux / macOS / Termux / WSL）
+# start.sh - one-click launcher for Linux / macOS / Termux / WSL
 #
-#   ./start.sh                              前台启动（默认端口 8790）
-#   ./start.sh --port 9000 --mode stateful  透传参数给 oc_bridge.py
-#   ./start.sh --bg                         后台常驻（日志 oc_bridge.log）
+#   ./start.sh                          foreground, port 8790
+#   ./start.sh --bg                     background (log: bridge.log, pid: .bridge.pid)
+#   ./start.sh --port 9000 --mode stateful
 #   OPENCODE_BIN=/path/to/opencode ./start.sh
 #
-# 幂等：先用「绝对路径」找 opencode（PATH、npm 全局、常见目录），
-#       找不到才安装；找到就用绝对路径传给桥上，不再依赖 PATH。
-#       所以正常情况下——只在第一次装，之后每次直接启动。
-set -e
+# --bg must be the first argument. Everything else is passed to oc_bridge.py.
+# The script uses an isolated data directory (.opencode-home) unless you pass
+# --home yourself.
+set -eu
 
 DIR=$(cd "$(dirname "$0")" && pwd)
 
-# --- 0. 解析 --bg，并记录用户是否自己指定了 --opencode-bin ---
 BG=0
-USER_SPECIFIED_BIN=0
-for a in "$@"; do
-  case "$a" in
-    --bg) BG=1 ;;
-    --opencode-bin|--opencode-bin=*) USER_SPECIFIED_BIN=1 ;;
-  esac
-done
-if [ "$BG" = "1" ]; then
-  # 从参数里去掉 --bg
-  n=$#
-  i=0
-  while [ $i -lt $n ]; do
-    if [ "$1" = "--bg" ]; then shift; else set -- "$@" "$1"; shift; fi
-    i=$((i + 1))
-  done
+if [ "${1:-}" = "--bg" ]; then
+  BG=1
+  shift
 fi
 
-# --- 1. python ---
+USER_BIN=0
+USER_HOME=0
+for a in "$@"; do
+  case "$a" in
+    --opencode-bin|--opencode-bin=*) USER_BIN=1 ;;
+    --home|--home=*)                 USER_HOME=1 ;;
+  esac
+done
+
+# ---------- 1. Python ----------
 PY=$(command -v python3 || command -v python || true)
 if [ -z "$PY" ]; then
-  echo "[start] 找不到 python3。Termux: pkg install python ；Debian/Ubuntu: apt install python3"
+  echo "[start] Python 3 was not found."
+  echo "[start] Debian/Ubuntu: sudo apt install python3"
+  echo "[start] Termux: pkg install python"
+  exit 1
+fi
+if ! "$PY" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)'; then
+  echo "[start] Python 3.8 or newer is required."
+  "$PY" --version
   exit 1
 fi
 
-# --- 2. 找 opencode（绝对路径，幂等）---
+# ---------- 2. find opencode (absolute path, idempotent) ----------
 find_opencode() {
-  # 2.1 环境变量显式指定
-  if [ -n "${OPENCODE_BIN:-}" ] && [ -x "$OPENCODE_BIN" ]; then printf '%s\n' "$OPENCODE_BIN"; return 0; fi
-  # 2.2 PATH
+  if [ -n "${OPENCODE_BIN:-}" ] && [ -x "$OPENCODE_BIN" ]; then
+    printf '%s\n' "$OPENCODE_BIN"; return 0
+  fi
   p=$(command -v opencode 2>/dev/null || true)
-  if [ -n "$p" ] && [ -x "$p" ]; then printf '%s\n' "$p"; return 0; fi
-  # 2.3 npm 全局目录（npm -g 装完通常不进 PATH，这里是关键）
+  if [ -n "$p" ] && [ -x "$p" ]; then
+    printf '%s\n' "$p"; return 0
+  fi
   if command -v npm >/dev/null 2>&1; then
     np=$(npm prefix -g 2>/dev/null || true)
     [ -n "$np" ] || np=$(npm root -g 2>/dev/null | sed 's#/lib/node_modules$##' || true)
@@ -56,7 +60,6 @@ find_opencode() {
       [ -n "$np" ] && [ -x "$c" ] && { printf '%s\n' "$c"; return 0; }
     done
   fi
-  # 2.4 常见安装位置
   for c in "$HOME/.local/bin/opencode" "$HOME/.opencode/bin/opencode" \
            "/usr/local/bin/opencode" "${PREFIX:-/nonexistent}/bin/opencode"; do
     [ -n "$c" ] && [ -x "$c" ] && { printf '%s\n' "$c"; return 0; }
@@ -65,34 +68,47 @@ find_opencode() {
 }
 
 OC_BIN=""
-if [ "$USER_SPECIFIED_BIN" = "0" ]; then
+if [ "$USER_BIN" = "0" ]; then
   OC_BIN=$(find_opencode || true)
 fi
 
-# --- 3. 真找不到才安装 ---
-if [ "$USER_SPECIFIED_BIN" = "0" ] && [ -z "$OC_BIN" ]; then
-  echo "[start] 未找到 opencode，尝试安装 opencode-ai ..."
+if [ "$USER_BIN" = "0" ] && [ -z "$OC_BIN" ]; then
+  echo "[start] opencode was not found. Installing opencode-ai with npm ..."
   if command -v npm >/dev/null 2>&1; then
-    npm i -g opencode-ai || echo "[start] npm 安装失败，请手动安装 opencode：https://opencode.ai"
+    npm i -g opencode-ai || echo "[start] npm install failed. See https://opencode.ai"
     OC_BIN=$(find_opencode || true)
-    [ -n "$OC_BIN" ] && echo "[start] 已安装：$OC_BIN"
   else
-    echo "[start] 也没有 npm。请先装 node/npm，或手动安装 opencode（Termux: pkg install nodejs && npm i -g opencode-ai）"
+    echo "[start] Node.js / npm was not found."
+    echo "[start] Install Node.js 18+ first, or install opencode manually."
+    echo "[start] Termux: pkg install nodejs && npm i -g opencode-ai"
   fi
 fi
 
-# --- 4. 把绝对路径前置传给桥上（用户自己指定则不代劳）---
-if [ "$USER_SPECIFIED_BIN" = "0" ] && [ -n "$OC_BIN" ]; then
+if [ "$USER_BIN" = "0" ] && [ -z "$OC_BIN" ]; then
+  echo "[start] Still could not locate the opencode binary."
+  echo "[start] Run 'opencode --version' once, or pass --opencode-bin PATH."
+  exit 1
+fi
+
+# ---------- 3. isolated data directory ----------
+if [ "$USER_HOME" = "0" ]; then
+  mkdir -p "$DIR/.opencode-home"
+  set -- --home "$DIR/.opencode-home" "$@"
+fi
+if [ "$USER_BIN" = "0" ]; then
   set -- --opencode-bin "$OC_BIN" "$@"
 fi
 
-# --- 5. 启动 ---
+export PYTHONUTF8=1
 cd "$DIR"
+
+# ---------- 4. start ----------
 if [ "$BG" = "1" ]; then
-  LOG="$DIR/oc_bridge.log"
-  echo "[start] 后台启动，日志 -> $LOG"
+  LOG="$DIR/bridge.log"
+  echo "[start] Background mode. Log: $LOG"
   nohup "$PY" -u "$DIR/oc_bridge.py" "$@" >>"$LOG" 2>&1 &
-  echo "[start] pid $!  （停止：kill $!）"
+  echo $! >"$DIR/.bridge.pid"
+  echo "[start] pid $! (stop with ./stop.sh)"
 else
   exec "$PY" -u "$DIR/oc_bridge.py" "$@"
 fi

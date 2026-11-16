@@ -1,8 +1,10 @@
 {
   "$schema": "https://opencode.ai/config.json",
 
-  "//": "把本文件内容合并进 ~/.config/opencode/opencode.json（Windows: %USERPROFILE%\\.config\\opencode\\opencode.json），",
-  "//2": "然后用 `oc_bridge.py --agent bridge` 启动，即可用下面这个精简 agent 顶掉 opencode 默认注入的 ~9.5KB 系统提示。",
+  "//": "把本文件内容合并进 opencode 的配置：",
+  "//1": "  - 使用启动脚本时（--home .opencode-home）：.opencode-home/.config/opencode/opencode.json",
+  "//2": "  - 或全局配置：~/.config/opencode/opencode.json（Windows: %USERPROFILE%\\.config\\opencode\\opencode.json）",
+  "//3": "然后用 `oc_bridge.py --agent bridge` 启动，即可用下面这个精简 agent 顶掉 opencode 默认注入的 ~9.5KB 系统提示。",
 
   "agent": {
     "bridge": {

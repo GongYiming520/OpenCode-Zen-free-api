@@ -3,6 +3,36 @@
 > 注：本仓库于 2026-09-22 所有功能完成后才 `git init`，
 > 此前的演进无 git 历史，本文件依实测记录补写。自基线提交 `73d88fb` 起以 git 为准。
 
+## 2026-11-16 — 开箱即用改造（GitHub 发布版）
+
+### 新增
+- **`start.bat` 重写**：自动检查 Python 3.8+、自动查找/安装 opencode、
+  自动创建仓库内隔离数据目录 `.opencode-home`，并优先解析 `.exe` / `.cmd`
+  （避免直接执行 npm 的无扩展名 shim 失败）。
+- **`start-zen.ps1` / `stop-zen.ps1` 重写**：后台启动带 PID、健康检查、
+  日志 UTF-8 读取；停止时按 PID 杀进程树，不再误伤其它 opencode 实例。
+- **`stop.sh`**：配合 `./start.sh --bg` 使用。
+- **`test_api.py` / `test_free_models.py`**：跨平台自测脚本，Windows 下由
+  `.bat` 调用；移除了重复的 PowerShell 测试脚本。
+- **`GET /`**：返回服务信息、端点和用法；新增 `GET /v1/models/{id}`。
+- **`--version`** 参数。
+- **`LICENSE`（MIT）** 与 **`.gitattributes`**（Windows 脚本 CRLF、Unix 脚本 LF）。
+
+### 修复
+- **`start.sh --bg` 参数错乱**：旧实现会在移除 `--bg` 时把后续参数重复/错位；
+  现在只接受首参数 `--bg`，其余参数原样传递。
+- **Windows 退出残留**：桥退出时用 `taskkill /T` 清理 `opencode serve` 子进程树。
+- **复用已有 `opencode serve` 时 UnknownError**：启动时检查 `/config` 是否包含
+  指定的 `bridge` agent，不存在则自动回退到 `build` 并提示。
+- **端口占用**：启动失败时给出明确提示，而不是抛裸 `OSError`。
+- 支持 OpenAI 新版 `developer` 角色，等同于 `system`。
+
+### 文档
+- **`README.md` / `README.en.md` 重写**：按“准备环境 → 启动 → 客户端配置 →
+  模型选择 → 兼容性 → FAQ”组织，明确说明流式是缓冲后分片、tools/多模态不支持、
+  采样参数会被忽略、API Key 不校验。
+- 免费模型清单更新为 2026-11-16 实测结果。
+
 ## 2026-09-22（基线前，无 git 记录）
 
 ### 探测与确认

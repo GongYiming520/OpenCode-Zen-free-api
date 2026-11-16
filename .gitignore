@@ -3,3 +3,7 @@ relay.log
 __pycache__/
 *.pyc
 _probe/
+*.pid
+.opencode-home/
+.bridge.pid
+tmp-test*
